@@ -1,0 +1,24 @@
+[project]
+name = "lsplayer-ste"
+version = "0.1.0"
+description = "LSPSTE: a light module player for the Atari STE (68000 source and Python tools)"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+[tool.ruff]
+line-length = 130
+target-version = "py310"
+src = ["tools", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["B905"]                        # zip() of equal-length lists is deliberate
+
+[tool.ruff.lint.per-file-ignores]
+"tools/*.py" = ["E402"]                       # sys.path is set before the sibling imports
+"tests/*.py" = ["E402"]
+
+[tool.mypy]
+strict = true
+mypy_path = "tools:tests"
+files = ["tools", "tests"]

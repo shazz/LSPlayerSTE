@@ -1,0 +1,9 @@
+scratch/
+build/
+__pycache__/
+.mypy_cache/
+.ruff_cache/
+*.pyc
+.DS_Store
+.venv/
+uv.lock

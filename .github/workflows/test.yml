@@ -1,0 +1,19 @@
+name: test
+on: [push, pull_request]
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install ruff mypy
+      - shell: bash
+        run: for t in tests/test_*.py tests/check_limits.py; do python -I "$t" | tail -1; done
+      - run: python -I tests/mutants.py
+      - run: ruff check .
+      - run: mypy --strict tools tests
