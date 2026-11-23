@@ -2,9 +2,9 @@
 """LSPSTE: read a ProTracker module and refuse what the light player cannot play.
 
 The subset (anything else raises ModError, with the place): 'M.K.' 4 channels, finetune 0, periods of the
-ProTracker table, a note always with its sample number, and the effects
-    Bxx position jump     Dxx pattern break (decimal row)     Fxx speed 1..31 (ticks per row)
-    Cxx on a note row: that note's volume; C00 alone: cut the channel. A volume change inside a note is refused.
+ProTracker table, and the effects of SUPPORTED below (their rules are in lsp_pt.py). Refused: 7xy tremolo, 8xx,
+E3x glissando, E4x/E7x waveforms, E5x finetune, E6x pattern loop, E8x, EEx pattern delay, EFx invert loop, F00
+and the BPM tempos F20..FF.
 Only the rows the song really plays are checked (rows after a pattern break may hold anything).
 """
 from __future__ import annotations
@@ -15,8 +15,11 @@ PERIODS = (856, 808, 762, 720, 678, 640, 604, 570, 538, 508, 480, 453, 428, 404,
            269, 254, 240, 226, 214, 202, 190, 180, 170, 160, 151, 143, 135, 127, 120, 113)
 ROWS = 64
 CHANNELS = 4
-SUPPORTED = ("Bxx position jump, Cxx volume of a note (C00 alone: cut the channel), Dxx pattern break, "
+SUPPORTED = ("0xy arpeggio, 1xx 2xx 3xx portamento, 4xy vibrato, 5xy 6xy the same with a volume slide, 9xx sample "
+             "offset, Axy volume slide, Bxx position jump, Cxx volume, Dxx pattern break, E0x (ignored), E1x E2x "
+             "fine portamento, E9x retrigger, EAx EBx fine volume, ECx cut, EDx delay, "
              "Fxx speed 1..31 (F20 and above set a BPM tempo: not supported)")
+E_PLAYED = (0x0, 0x1, 0x2, 0x9, 0xA, 0xB, 0xC, 0xD)
 
 
 class ModError(ValueError):
@@ -51,16 +54,6 @@ class Module:
         return Cell((b[0] & 0xF0) | (b[2] >> 4), ((b[0] & 0x0F) << 8) | b[1], b[2] & 0x0F, b[3])
 
 
-@dataclass(frozen=True)
-class Action:
-    """What one cell asks for. key = (sample, period, volume) to start, cut = stop the channel."""
-    key: tuple[int, int, int] | None = None
-    cut: bool = False
-    jump: int | None = None         # B: next position
-    brk: int | None = None          # D: row in the next position
-    speed: int | None = None        # F
-
-
 def _sample(data: bytes, i: int) -> tuple[int, int, int, int, int]:
     o = 20 + 30 * i
     words = [int.from_bytes(data[o + k:o + k + 2], "big") * 2 for k in (22, 26, 28)]
@@ -93,40 +86,18 @@ def parse(data: bytes) -> Module:
     return Module(samples, order, patterns)
 
 
-def _key(mod: Module, c: Cell, where: str) -> tuple[int, int, int] | None:
-    if not c.sample and not c.period:
-        return None
-    if not c.sample or not c.period:
-        raise ModError(f"{where}: a note without a sample number or a sample number without a note")
-    if c.period not in PERIODS:
+def check(mod: Module, c: Cell, where: str) -> None:
+    """Raise ModError (with the place) if the player cannot play this cell."""
+    if c.period and c.period not in PERIODS:
         raise ModError(f"{where}: period {c.period} is not in the ProTracker table")
-    s = mod.samples.get(c.sample)
-    if s is None:
-        raise ModError(f"{where}: sample {c.sample} is empty")
-    if s.finetune:
-        raise ModError(f"{where}: sample {c.sample} has finetune {s.finetune} (only 0)")
-    vol = min(c.arg, 64) if c.effect == 0xC else s.volume
-    return (c.sample, c.period, vol)
-
-
-def action(mod: Module, pattern: int, row: int, channel: int) -> Action:
-    """The checked meaning of one cell; raises ModError outside the subset."""
-    c = mod.cell(pattern, row, channel)
-    where = f"pattern {pattern} row {row} channel {channel + 1}"
-    key = _key(mod, c, where)
-    if c.effect == 0 and c.arg == 0:
-        return Action(key=key)
-    if c.effect == 0xC:
-        if key is None and c.arg != 0:
-            raise ModError(f"{where}: C{c.arg:02X} without a note (a volume change inside a note)")
-        return Action(key=key if key and key[2] else None, cut=key is None or key[2] == 0)
-    if c.effect == 0xB:
-        return Action(key=key, jump=c.arg)
-    if c.effect == 0xD:
-        brk = (c.arg >> 4) * 10 + (c.arg & 0x0F)
-        if brk >= ROWS:
-            raise ModError(f"{where}: D{c.arg:02X} breaks to row {brk}")
-        return Action(key=key, brk=brk)
-    if c.effect == 0xF and 1 <= c.arg <= 31:
-        return Action(key=key, speed=c.arg)
-    raise ModError(f"{where}: effect {c.effect:X}{c.arg:02X} is not supported; the player has {SUPPORTED}")
+    if c.sample:
+        s = mod.samples.get(c.sample)
+        if s is None:
+            raise ModError(f"{where}: sample {c.sample} is empty")
+        if s.finetune:
+            raise ModError(f"{where}: sample {c.sample} has finetune {s.finetune} (only 0)")
+    bad = c.effect in (7, 8) or (c.effect == 0xE and c.arg >> 4 not in E_PLAYED)
+    if bad or (c.effect == 0xF and not 1 <= c.arg <= 31):
+        raise ModError(f"{where}: effect {c.effect:X}{c.arg:02X} is not supported; the player has {SUPPORTED}")
+    if c.effect == 0xD and (c.arg >> 4) * 10 + (c.arg & 0x0F) >= ROWS:
+        raise ModError(f"{where}: D{c.arg:02X} breaks to row {(c.arg >> 4) * 10 + (c.arg & 0x0F)}")

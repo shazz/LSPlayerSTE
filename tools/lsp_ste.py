@@ -11,7 +11,8 @@ Headroom: the music gain is
 set so that the exact mix of the whole song (intro + two passes of its loop, lsp_ref.py) peaks at --music-peak or
 less; the effects channel is scaled to +-fx-peak by a table; the two must add up to 127 at most, so the five
 channels can never leave a signed byte (which the long-add mixer relies on).
-Parts: lsp_mod (module, subset), lsp_seq (timeline, stream), lsp_bank (variants, resampling), lsp_dat (file).
+Parts: lsp_mod (module, subset), lsp_pt (ProTracker's effects), lsp_voice (where a note goes on after an effect),
+lsp_seq (timeline, stream), lsp_bank (variants, resampling), lsp_dat (file).
 """
 from __future__ import annotations
 
@@ -21,13 +22,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lsp_bank import plan
-from lsp_dat import MAX_BANK, MAX_FILE, head, pack, voff
+from lsp_dat import MAX_BANK, MAX_FILE, head, pack
 from lsp_mod import ModError, parse
 from lsp_ref import levels
 from lsp_seq import encode, simulate
 
 FIRST_GAIN = 16000                  # under 1/4: four full-scale channels cannot overflow the first measure
 TRIES = 8
+MAX_GAIN = 0xFE00                   # above it a volume table would leave the byte (a song of silent samples)
 
 
 @dataclass(frozen=True)
@@ -48,17 +50,18 @@ def build(mod_bytes: bytes, music_peak: int = 80, fx_peak: int = 47,
         raise ModError(f"music peak {music_peak} + effects peak {fx_peak} must be 127 or less")
     mod = parse(mod_bytes)
     tl = simulate(mod)
-    pl = plan(mod, tl.hold)
-    stream, loop_off = encode(tl, {v.key: voff(i) for i, v in enumerate(pl.variants)})
+    pl = plan(mod, tl.spans)
+    targets = sorted({target for events in tl.ticks for _, target in events if target})
+    stream, loop_off = encode(tl, {target: i + 1 for i, target in enumerate(targets)})
     span = len(tl.ticks) + 2 * (len(tl.ticks) - tl.loop)
     gain = FIRST_GAIN
     for _ in range(TRIES):
-        dat = pack(pl, gain, fx_peak, stream, loop_off, max_file, max_bank)
+        dat = pack(pl, targets, gain, fx_peak, stream, loop_off, max_file, max_bank)
         low, high, rms = levels(dat, span)
         peak = max(-low, high, 1)
         if peak <= music_peak and gain != FIRST_GAIN:
             return Built(dat, gain, low, high, rms, len(tl.ticks), tl.loop, len(pl.variants))
-        gain = gain * music_peak // peak - (0 if gain == FIRST_GAIN else 64)
+        gain = min(MAX_GAIN, gain * music_peak // peak - (0 if gain == FIRST_GAIN else 64))
     raise ModError(f"no gain keeps the music under {music_peak} after {TRIES} tries")
 
 

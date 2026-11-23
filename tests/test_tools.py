@@ -151,7 +151,7 @@ def cli_checks() -> list[Check]:
     with tempfile.TemporaryDirectory() as tmp:
         t = Path(tmp)
         bad = t / "bad.mod"
-        bad.write_bytes(make_mod([{(0, 0): (1, 428, 1, 5)}], [0], [(bytes(300), 64, 0, 0, 0)]))
+        bad.write_bytes(make_mod([{(0, 0): (1, 428, 7, 5)}], [0], [(bytes(300), 64, 0, 0, 0)]))
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             rc_bad = ste_main(["lsp_ste.py", str(bad), str(t / "o.dat")])
@@ -164,7 +164,7 @@ def cli_checks() -> list[Check]:
         made = (t / "o.dat").is_file() and not (t / "nope.dat").exists()
     return [
         ("cli: an unsupported effect gives exit code 1, the place, and the list of supported ones, and no output file",
-         rc_bad == 1 and "pattern 0 row 0 channel 1: effect 105 is not supported" in err.getvalue()
+         rc_bad == 1 and "pattern 0 row 0 channel 1: effect 705 is not supported" in err.getvalue()
          and "Fxx speed 1..31" in err.getvalue()),
         ("cli: the converter writes the file and says how many variants and ticks", rc_ok == 0 and made
          and "16 variants, 728 ticks (loop to 160)" in out.getvalue()),

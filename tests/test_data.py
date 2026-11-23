@@ -10,8 +10,8 @@ from fractions import Fraction
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from common import LOOP, SAMPLES, SHOT, Check, refused, run
-from lsp_bank import Plan, Variant, fxtab, interp, natural_ticks, step_for, virtual, voltab
+from common import SAMPLES, SHOT, Check, refused, run
+from lsp_bank import Plan, Rendition, Variant, fxtab, interp, natural_bytes, step_for, virtual, voltab
 from lsp_dat import expand, head, pack
 from lsp_mod import ModError, Sample
 from lsp_ref import MixOverflow, Player, mix
@@ -36,15 +36,17 @@ def bank_checks() -> list[Check]:
         ("bank: step = Paula rate / 12,517 in 16.16; halved rendition (half the step) above sqrt(2)",
          [s[0] for s, _ in steps] == [0, 0, 1, 1]
          and all(abs(Fraction(s[1] << s[0], 65536) - r) <= Fraction(1, 65536) for s, r in steps)),
-        ("bank: a 300 B one-shot at period 428 lasts 2 ticks; a looped sample has no natural end",
-         natural_ticks(Sample(SHOT[0], 64, 0, 0, 0), 428) == 2 and natural_ticks(Sample(LOOP[0], 64, 0, 0, 400), 428) is None),
+        ("bank: a 300 B one-shot lasts 300 / 0.66207 = 453.1 -> 454 bytes at period 428; at 143 it is read halved, "
+         "150 samples at 0.99079 = 151.4 -> 152",
+         natural_bytes(Sample(SHOT[0], 64, 0, 0, 0), 428) == 454 and natural_bytes(Sample(SHOT[0], 64, 0, 0, 0), 143) == 152),
         ("bank: a loop is unrolled as ProTracker plays it (to the loop end, then the loop again)",
          virtual(ramp, 12, 0) == bytes([0, 1, 2, 3, 4, 5, 6, 4, 5, 6, 4, 5])),
         ("bank: a one-shot is followed by zeros; the halved rendition averages pairs (floor)",
          virtual(shot, 12, 0) == bytes(range(10)) + bytes(2) and virtual(ramp, 6, 1) == bytes([0, 2, 4, 5, 5, 4])),
         ("bank: interpolation at step 0.5 gives the midpoints, at 1.0 the source, at 1.5 every 1.5 samples",
-         interp(src, 0x8000, 5) == bytes([0, 50, 100, 0, 156]) and interp(src, 0x10000, 3) == src[:3]
-         and interp(bytes([0, 10, 20, 30, 40, 50]), 0x18000, 4) == bytes([0, 15, 30, 45])),
+         interp(Rendition(src, 5, 1), 0x8000, 5) == bytes([0, 50, 100, 0, 156])
+         and interp(Rendition(src, 5, 1), 0x10000, 3) == src[:3]
+         and interp(Rendition(bytes([0, 10, 20, 30, 40, 50, 60, 70]), 7, 1), 0x18000, 4) == bytes([0, 15, 30, 45])),
         ("bank: volume table = $80 + round(sample * vol/64 * gain), index sample + 128",
          voltab(64, 65536) == bytes(range(256)) and voltab(32, 32768)[127 + 128] == 160
          and voltab(32, 32768)[-127 + 128] == 96 and voltab(48, 20000)[128] == 128),
@@ -59,30 +61,56 @@ def dat_checks() -> list[Check]:
     d = b.dat
     w = struct.unpack_from(">HH", d, 4)
     size, bank, o_vol, o_fx, o_str, o_loop = struct.unpack_from(">6I", d, 8)
-    o_rend, csum = struct.unpack_from(">II", d, 36)
-    v0, v1 = struct.unpack_from(">IIHH", d, 48), struct.unpack_from(">IIHH", d, 60)
+    o_rend, csum, o_tgt = struct.unpack_from(">III", d, 36)
+    v0, v1 = struct.unpack_from(">HHIIHH", d, 48), struct.unpack_from(">HHIIHH", d, 64)
+    rends = [struct.unpack_from(">III", d, o_rend + 12 * i) for i in range(2)]
     flat = expand(d).data[2 * 252:]
     level = 128 + (64 * b.gain + 32768) // 65536
-    cut = bytearray(d)
-    cut[o_rend + 5] ^= 1
-    big = Plan((Variant((1, 428, 64), 0, 65536, 1700, 0),), (bytes(2000),), (64,))
     return [
-        ("dat: header 'LSP1', version 1, 2 variants, sizes and offsets in file order, tick 252",
-         d[:4] == b"LSP1" and w == (1, 2) and size == len(d) and (o_vol, o_fx, o_str) == (72, 72 + 256, 72 + 512)
-         and o_str <= o_loop < o_rend < size and struct.unpack_from(">HH", d, 32) == (1, 252)),
+        ("dat: header 'LSP1', version 2, 2 variants; after the 48 B header: 2 variants of 16 B, 2 renditions of "
+         "12 B (at 80), 3 targets of 4 B (at 104), one volume table (at 116), the effects table, the stream; tick 252",
+         d[:4] == b"LSP1" and w == (2, 2) and size == len(d) and (o_rend, o_tgt) == (80, 104)
+         and (o_vol, o_fx, o_str) == (116, 116 + 256, 116 + 512)
+         and o_str <= o_loop < rends[0][0] < size and struct.unpack_from(">HH", d, 32) == (1, 252)),
         ("dat: checksum = sum of the bytes from offset 48", csum == sum(d[48:]) & 0xFFFFFFFF),
-        ("dat: variant entries (rendition, step, ticks, table): the one-shot 2 ticks, the held loop 60",
-         v0[2:] == (2, 0) and v1[2:] == (60, 0) and o_rend <= v0[0] < v1[0] < size and v0[1] == v1[1] == step_for(428)[1]),
+        ("dat: variant entries (rendition, table, step, first sample and fraction, long words): the one-shot 2 "
+         "ticks = 126 longs, the held loop 60 ticks = 3,780, both from the start of their sample",
+         v0 == (0, 0, step_for(428)[1], 0, 0, 126) and v1 == (1, 0, step_for(428)[1], 0, 0, 3780)),
+        ("dat: rendition entries (data, end, loop): the 300 B one-shot ends after 4 more zeros and loops over "
+         "them, the 400 B loop is stored once; the targets are silence, the one-shot at 0 and the loop at 504",
+         [r[1:] for r in rends] == [(304, 4), (400, 400)] and rends[0][0] + 306 == rends[1][0]
+         and rends[1][0] + 402 == size and struct.unpack_from(">III", d, o_tgt) == (0, 0, 504)),
         ("dat: bank = (2 + 60) ticks of 252 B; a constant 64 at volume 64 becomes $80 + round(64 * gain) everywhere",
          bank == 62 * 252 and len(flat) == 60 * 252 and set(flat) == {level}),
+    ]
+
+
+def target_checks() -> list[Check]:
+    d = build(MOD).dat
+    at = struct.unpack_from(">I", d, 44)[0] + 8                 # the second target: the looped note, at 504
+    cut = bytearray(d)
+    cut[len(d) - 5] ^= 1
+    big = Plan(tuple(Variant((1, p, 64), 0, 65536, 0, 850 * 252, 0) for p in (428, 404)), (Rendition(bytes(8), 4, 4),), (64,))
+
+    def moved(value: int) -> bytes:
+        out = bytearray(d)
+        struct.pack_into(">I", out, at, value)
+        struct.pack_into(">I", out, 40, sum(out[48:]) & 0xFFFFFFFF)
+        return bytes(out)
+    return [
         ("dat: a changed byte, a short file, a file with zeros appended and a wrong magic are refused",
          refused(lambda: head(bytes(cut)), "checksum") and refused(lambda: head(d[:-2]), "size")
          and refused(lambda: head(d + bytes(2)), "size")
          and refused(lambda: head(b"FX01" + d[4:]), "magic")),
         ("dat: a bank over the limit (default 332 KB = 1,700 ticks x 252 B is 428,400 B) is refused",
-         refused(lambda: pack(big, 16000, 47, b"\xff\xff", 0), "bank would be 428400 B")),
+         refused(lambda: pack(big, [], 16000, 47, b"\xff\xff", 0), "bank would be 428400 B")),
         ("dat: a file over the limit is refused, with the limit as given",
          refused(lambda: build(MOD, max_file=100), "more than the 100 B")),
+        ("dat: a target may be the last whole tick of the bank (62 ticks: 61 x 252), not a byte further, nor odd",
+         expand(moved(61 * 252)).targets[2] == 61 * 252 and refused(lambda: expand(moved(61 * 252 + 2)), "outside the bank")
+         and refused(lambda: expand(moved(503)), "odd byte")),
+        ("gain: a song of silent samples converts (the gain stops at 0.992: a volume table stays in the byte)",
+         build(make_mod(SONG, [0], [(bytes(300), 64, 0, 0, 0)] * 4)).gain == 0xFE00),
     ]
 
 
@@ -151,7 +179,7 @@ def demo_checks() -> list[Check]:
 
 
 def main() -> int:
-    return run("data tests", [bank_checks, dat_checks, mix_checks, fx_checks, ref_checks, demo_checks])
+    return run("data tests", [bank_checks, dat_checks, target_checks, mix_checks, fx_checks, ref_checks, demo_checks])
 
 
 if __name__ == "__main__":

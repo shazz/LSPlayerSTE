@@ -14,7 +14,7 @@
 ;   lsp_init    In: a0 -> path of LSPSTE.DAT, a1 -> path of FX.DAT (0 = no effects), both 0-terminated, GEMDOS
 ;               paths. Out: d0.l = 0 ready; 1 not an STE (nothing touched); 2 LSPSTE.DAT missing or bad;
 ;               3 FX.DAT missing or bad (music works, lsp_fx does nothing); 4 song too big for lsp_config.s.
-;               Loads both files, builds the bank (5 s for a 233 KB one at 8 MHz), clears the ring, enables
+;               Loads both files, builds the bank (5.7 s for a 244 KB one at 8 MHz), clears the ring, enables
 ;               lsp_vbl. Clobbers d0. Stack 146 + GEMDOS. Call before the first lsp_vbl.
 ;   lsp_setup   As lsp_init, for a game that loads the files itself: LSPSTE.DAT at LSP_DAT and FX.DAT at LSP_FX,
 ;               In: d0.l = bytes of LSPSTE.DAT, d1.l = bytes of FX.DAT (0 = none). Out: d0.l as lsp_init (no 1).
@@ -34,6 +34,7 @@
 ; Variables: lsp_v and what follows it (lsp_rt.s). lsp_ticks (long) counts the ticks mixed.
         include "lsp_config.s"
         include "lsp_init.s"
+        include "lsp_check.s"
         include "lsp_bank.s"
         include "lsp_rt.s"
         include "lsp_api.s"

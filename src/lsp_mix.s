@@ -1,8 +1,9 @@
 ; src/lsp_mix.s: LSPSTE, one tick (run-time, after lsp_api.s): take a posted start or stop and a posted effect, read
 ; the stream record that is due, mix 252 bytes at the ring's write position. a6 = lsp_v; d0-d7/a0-a5 lost.
 ; Stream (tools/lsp_seq.py), words: record = events << 8 | ticks to the next record, then per event
-; channel << 14 | offset in LSPSTE.DAT of the variant's entry (its first long = address in the bank), 0 = silence;
-; $FFFF = go on at the loop record (file offset at 28 of the header).
+; target << 2 | channel; a target is an entry of the table at 44 of the header: the address the channel plays
+; from (lsp_bank made it: a byte of a variant in the bank, a new note or the middle of one for the effects that
+; bend a note; entry 0 = the silent tick); $FFFF = go on at the loop record (file offset at 28 of the header).
 ; Hold (lsp_hold sets lsp_hreq): the module's channels are silent for that tick, the stream does not advance and
 ; the channels keep their positions; the effects channel goes on.
 lsp_tick:   movea.l a6,a1                   ; a1 = lsp_v for lsp_note
@@ -64,16 +65,14 @@ lsp_tick:   movea.l a6,a1                   ; a1 = lsp_v for lsp_note
         lsr.w   #8,d0                   ; events
         beq.s   .recx
         subq.w  #1,d0
+        adda.l  44(a1),a1               ; a1 = target table (d1's high word is 0)
 .ev:    move.w  (a0)+,d1
-        move.w  d1,d2
-        rol.w   #2,d2
-        andi.w  #3,d2
-        lsl.w   #2,d2                   ; d2 = channel * 4
-        move.l  #LSP_SIL,d3
-        andi.w  #$3FFF,d1
-        beq.s   .set
-        move.l  0(a1,d1.w),d3           ; the variant's address
-.set:   move.l  d3,lsp_ptr-lsp_v(a6,d2.w)
+        moveq   #3,d2
+        and.w   d1,d2
+        eor.w   d2,d1                   ; d1 = target * 4
+        add.w   d2,d2
+        add.w   d2,d2                   ; d2 = channel * 4
+        move.l  0(a1,d1.l),lsp_ptr-lsp_v(a6,d2.w)
         dbra    d0,.ev
 .recx:  move.l  a0,lsp_sptr-lsp_v(a6)
 .mix:   move.l  #LSP_SIL,d5

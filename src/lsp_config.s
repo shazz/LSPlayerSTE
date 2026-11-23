@@ -13,7 +13,7 @@
 LSP_TICK    equ     252                     ; bytes mixed per tick: fixed, converter and mixer agree on it
 LSP_RINGTK  equ     8                       ; ticks in the ring: 8 = 2,016 bytes, the lead is 126..378 bytes (only 8 tested)
 LSP_RINGSZ  equ     LSP_RINGTK*LSP_TICK
-LSP_VERSION equ     1                       ; LSPSTE.DAT format version the player reads
+LSP_VERSION equ     2                       ; LSPSTE.DAT format version the player reads
 LSP_MINTOS  equ     $0106                   ; lowest TOS os_version lsp_probe accepts: 1.06, the first STE TOS (cookie jar)
 
 LSP_RING    equ     $90000                  ; even; the ring must not cross a 64 KB boundary

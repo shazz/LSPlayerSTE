@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lsp_bank import RATE, TICK
-from lsp_dat import HEAD, expand, head
+from lsp_dat import expand, head
 from lsp_mod import ModError
 
 LONGS = struct.Struct(f">{TICK // 4}L")
@@ -75,8 +75,7 @@ class Player:
         self.wait = word & 0xFF
         for i in range(word >> 8):
             ev = struct.unpack_from(">H", self.dat, self.sptr + 2 + 2 * i)[0]
-            off = ev & 0x3FFF
-            self.ptr[ev >> 14] = self.bank.starts[(off - HEAD.size) // 12] if off else None
+            self.ptr[ev & 3] = self.bank.targets[ev >> 2]
         self.sptr += 2 + 2 * (word >> 8)
 
     def tick(self, paused: bool = False) -> bytes:

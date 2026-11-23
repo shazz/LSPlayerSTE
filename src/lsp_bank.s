@@ -1,35 +1,48 @@
 ; src/lsp_bank.s: LSPSTE start-up, the heavy parts. a5 = LSP_DAT in all of them.
 ; lsp_bank: build the "bank" at LSP_BANK: every (sample, period, volume) the song plays, resampled to 12,517 Hz as
-; a straight run of whole ticks. It is built here because it is several times the size of the file; the loop is
-; mirrored bit for bit by interp() in tools/lsp_bank.py.
+; a straight run of bytes, then turn the target table (what the stream's events point channels at) from offsets
+; in the bank into addresses. The bank is built here because it is several times the size of the file; the loop
+; is mirrored bit for bit by interp() in tools/lsp_bank.py.
 ; lsp_fxset: check FX.DAT, fill the pointer table, scale the samples in place.
 
-; Variant entry (12 bytes from 48(a5)): rendition offset.l, 16.16 step.l, ticks.w, volume table.w;
-; the first long becomes the variant's address in the bank (what a stream event points at).
+; Variant entry (16 bytes from 48(a5)): rendition.w, volume table.w, 16.16 step.l, first sample.l, first
+; fraction.w, size in long words.w. Rendition entry (12 bytes, table at 36(a5)): data.l (offset in the file),
+; end.l, loop length.l, in samples: at sample `end` the loader goes back one loop length (a one-shot loops over
+; the zeros after it).
 ; Per output byte: a = src[i], b = src[i+1], v = a + ((b - a) * (frac >> 1) >> 15), out = table[v]; i.frac += step.
-; Clobbers d0-d7, a0-a4.
+; Clobbers d0-d7, a0-a4, a6.
 lsp_bank:   lea     LSP_BANK,a1             ; a1 = output
         lea     48(a5),a4
         move.w  6(a5),-(a7)             ; variants left
-.var:   movea.l a5,a0
-        adda.l  (a4),a0                 ; a0 = rendition (signed bytes)
-        move.l  a1,(a4)+
-        move.l  (a4)+,d5
-        movea.w d5,a2                   ; a2 = step fraction (added as a word below)
-        clr.w   d5
-        swap    d5                      ; d5 = step integer part
-        move.w  (a4)+,d1                ; ticks
-        subq.w  #1,d1
+.var:   move.w  (a4)+,d0
+        mulu.w  #12,d0
+        movea.l a5,a0
+        adda.l  36(a5),a0
+        adda.l  d0,a0                   ; the variant's rendition entry
+        movea.l 4(a0),a6                ; a6 = end
+        move.l  8(a0),-(a7)             ; (a7) = loop length
+        move.l  (a0),d0
+        lea     0(a5,d0.l),a0           ; a0 = rendition (signed bytes)
         move.w  (a4)+,d0
         lsl.w   #8,d0
         movea.l a5,a3
         adda.l  16(a5),a3
         adda.w  d0,a3
         lea     128(a3),a3              ; a3 = this volume's table, indexed by the signed sample
-        moveq   #0,d4                   ; d4 = source index
-        moveq   #0,d0                   ; d0 = fraction
-.tick:  move.w  #LSP_TICK-1,d7
-.smp:   move.b  0(a0,d4.l),d2
+        move.l  (a4)+,d5
+        movea.w d5,a2                   ; a2 = step fraction (added as a word below)
+        clr.w   d5
+        swap    d5                      ; d5 = step integer part
+        move.l  (a4)+,d4                ; d4 = source index
+        move.w  (a4)+,d0                ; d0 = fraction
+        move.w  (a4)+,d1                ; long words
+        subq.w  #1,d1
+.long:  moveq   #3,d7
+.smp:   cmp.l   a6,d4                   ; at the end of the loop: back to its start
+        bcs.s   .in
+        sub.l   (a7),d4
+        bra.s   .smp
+.in:    move.b  0(a0,d4.l),d2
         ext.w   d2
         move.b  1(a0,d4.l),d3
         ext.w   d3
@@ -44,10 +57,22 @@ lsp_bank:   lea     LSP_BANK,a1             ; a1 = output
         add.w   a2,d0
         addx.l  d5,d4
         dbra    d7,.smp
-        dbra    d1,.tick
+        dbra    d1,.long
+        addq.l  #4,a7
         subq.w  #1,(a7)
         bne.s   .var
         addq.l  #2,a7
+        movea.l a5,a0                   ; targets: entry 0 = the silent tick, the others = LSP_BANK + offset
+        adda.l  44(a5),a0
+        move.l  16(a5),d1
+        sub.l   44(a5),d1
+        lsr.l   #2,d1                   ; entries (lsp_check: one at least)
+        move.l  #LSP_SIL,(a0)+
+        move.l  #LSP_BANK,d0
+        bra.s   .tnx
+.tgt:   add.l   d0,(a0)+
+.tnx:   subq.l  #1,d1
+        bne.s   .tgt
         rts
 
 ; In: d7.l = bytes of FX.DAT at LSP_FX (0 = none asked for, negative = it could not be read).

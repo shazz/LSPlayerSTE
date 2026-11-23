@@ -10,30 +10,57 @@ Two jobs: (A) convert your module and sound effects, (B) wire the player into th
 
 Convert with `python3 -I tools/lsp_ste.py song.mod build/LSPSTE.DAT`. It prints the size of the file, the bank the
 loader will build, the variant and tick counts, the loop point and the music level, for example
-`19646 B + 56448 B bank built at start, 16 variants, 728 ticks (loop to 160), gain 0.3255, music -76..79`.
+`4316 B + 56448 B bank built at start, 16 variants, 728 ticks (loop to 160), gain 0.3255, music -76..79`.
 
 **What the player accepts.** A 4-channel `M.K.` module, finetune 0 on every sample used, notes only on the
-ProTracker period table, a sample number on every note, and these effects:
+ProTracker period table, and these effects, played as the ProTracker 2.3 replay routine plays them:
 
 | Effect | Meaning here |
 |---|---|
+| `0xy` | arpeggio: the note, x and y semitones above it, one per tick |
+| `1xx` `2xx` | portamento up (stops at B-3, period 113) and down (stops at C-1, 856), xx per tick after the first |
+| `3xx` | tone portamento to the note on its row (that note does not restart); `300` goes on with the last speed |
+| `4xy` | vibrato, speed x, depth y; a `0` digit keeps the last value |
+| `5xy` `6xy` | go on with the last `3xx` / `4xy`, and slide the volume as `Axy` |
+| `9xx` | start the sample xx * 256 bytes in; `900` uses the last offset |
+| `Axy` | volume slide: up by x or down by y per tick after the first |
 | `Bxx` | position jump (this is how a song loops) |
-| `Cxx` | volume of the note on that row; `C00` on a row without a note cuts the channel |
+| `Cxx` | volume, on a note's row or inside a note; `C00` silences the channel (the note runs on unheard) |
 | `Dxx` | pattern break (the row is decimal, as in ProTracker) |
+| `E1x` `E2x` | fine portamento up / down, once on the row's first tick |
+| `E9x` | restart the sample every x ticks |
+| `EAx` `EBx` | fine volume up / down, once |
+| `ECx` | volume 0 on tick x |
+| `EDx` | start the note on tick x |
+| `E0x` | the Amiga's filter: accepted, does nothing |
 | `Fxx` with `01`..`1F` | speed in ticks per row |
 
-Only the rows the song really plays are checked; rows after a `Dxx` or `Bxx` may hold anything.
+A note without a sample number restarts the channel's last sample at its current volume; a sample number
+without a note puts the volume back to the sample's own. Only the rows the song really plays are checked;
+rows after a `Dxx` or `Bxx` may hold anything.
+
+**ProTracker's quirks are kept**, because modules are written against them: slides and vibrato do nothing on
+a row's first tick; after an arpeggio or a vibrato the note is back on its own period at the next row, except
+that a row with only `9xx`, `Bxx`, `Cxx`, `Dxx` or `Fxx` keeps the bent period for its first tick (a row with
+only `Exx` for all its ticks);
+a `1xx` step larger than the period itself wraps to a very low note instead of stopping at 113 (and is refused
+if that note is left sounding into the next row: its period is then outside 57..4095); `9xx` on a row with a note moves
+the start twice for the notes that follow without a sample number; the memory of `3xx`, `4xy` and `9xx`
+is empty the first time the song is played and not when it loops, so a `400` before the first `4xy` only
+sounds from the second pass (the converter then keeps both versions of that part: the stream gets longer).
 
 **Refusals, and what to do in the tracker.** The converter stops at the first problem and says where
 (`pattern`, `row`, `channel` are as the tracker numbers them, channel 1 to 4):
 
 | Message (shortened) | Cause | Fix |
 |---|---|---|
-| `effect 105 is not supported; the player has Bxx ..., Cxx ..., Dxx ..., Fxx ...` | any effect not in the table (slides, arpeggio, vibrato, `9xx` offset, `Exx`, `Axx`...) | remove it; replace an arpeggio or slide by separate notes, a volume slide by notes with `Cxx`, `E6x` loops by copied rows or a `Bxx` |
+| `effect 705 is not supported; the player has 0xy arpeggio, ...` | an effect not in the table: `7xy` tremolo, `8xx`, `E3x`..`E8x`, `EEx`, `EFx`, `F00` | remove it; replace a tremolo by `Cxx` on the rows, `E6x` loops by copied rows or a `Bxx`, `EEx` by empty rows |
 | `effect F7D is not supported ...` | `F20` and above is a BPM tempo | use speed values 1..31 (default speed 6; rows are 16th notes, so change the speed or edit the pattern length to change feel) |
-| `C20 without a note (a volume change inside a note)` | `Cxx` on a row with no note | put the volume on a new note (retrigger), or use `C00` to cut |
+| `arpeggio 047 goes above B-3` | the arpeggio's top note is outside ProTracker's table (the Amiga plays garbage there) | lower the note or the arpeggio |
 | `period 430 is not in the ProTracker table` | a note off the table (some trackers allow finer pitches) | snap it to a table note |
-| `a note without a sample number or a sample number without a note` | e.g. a continuing sample number | give every note its sample number |
+| `period 40 is outside 57..4095` | a vibrato or a wrapped slide left the range the player resamples | reduce it |
+| `a note without a sample (no sample number on this channel yet, or 9xx ran past its end)` | the first note of a channel has no sample number, or `9xx` points past the sample | give the note its sample number; lower the offset |
+| `sample number 3 without a note while sample 2 plays` | ProTracker would swap the samples at the end of the loop | put the note with it, or cut the channel first |
 | `sample N has finetune F (only 0)` | finetune set | set it to 0 and re-pitch the note |
 | `sample N is empty` | note uses an empty slot | fill or remove |
 | `looped sample S is never replaced or cut (it would play for ever)` | a looped sample is still sounding when the song loops, with nothing after it | add a `C00` or another note on that channel inside the loop |
@@ -41,10 +68,16 @@ Only the rows the song really plays are checked; rows after a `Dxx` or `Bxx` may
 | `the song does not loop within 65536 rows` | no `Bxx` to a repeated position and no wrap | add the jump back to the loop start |
 | `LSPSTE.DAT would be N B: more than ...` / `the bank would be N B ...` | too big for the areas in `lsp_config.s` | see below |
 
-**Size.** Each distinct (sample, period, volume) is a variant; its bank space is the longest time it sounds
-before being replaced or cut, in ticks of 252 bytes. Long held looped notes and many different pitches
-or volumes cost the most. To shrink the bank: cut notes early with `C00`, use fewer pitches of a looped
-sample, shorten loops of one-shots. A note held for 8 rows at speed 6 costs 48 x 252 = 12 KB per variant.
+**Size.** Each distinct (sample, period, volume) is a variant; its bank space is what the song reads of it.
+For a plain note that is the longest time it sounds before being replaced or cut: a note held for 8 rows at
+speed 6 costs 48 x 252 = 12 KB. A note bent by effects is cheaper per variant but has more of them: every
+period and volume it passes through holds one turn of the sample's loop (or, for a one-shot, the pieces that
+are played), one tick, and the longest time the note then stays unchanged. So a vibrato on a 16-byte chip
+loop costs 0.5 to 0.8 KB per period it touches, on a 4 KB loop that loop's length at each pitch on top: keep
+deep vibratos and long volume slides for short loops. To shrink the bank: cut notes early with `C00`, use fewer pitches of a looped
+sample, shorten held notes. The file itself (64 KB at most with the default memory map) holds every sample
+once, a second time at half rate if it is played above 17.7 kHz, 256 B per distinct volume, and the stream:
+2 B per event.
 
 **Speed and tempo.** A tick is 252 bytes at 12,517 Hz, so 49.67 ticks per second: ProTracker speed 6 at 125 BPM
 (50 ticks/s) plays 0.66 % slow. The tempo cannot change except through `Fxx` speed.
@@ -118,7 +151,7 @@ treated as "not an STE" by the probe.
 .done:
 ```
 
-`lsp_init` loads both files, checks them, builds the bank (1.2 s for a 56 KB bank, about 5 s for 233 KB at 8 MHz)
+`lsp_init` loads both files, checks them, builds the bank (1.3 s for a 56 KB bank, 5.7 s for 244 KB at 8 MHz)
 and clears the ring. If the game loads files its own way, put them at `LSP_DAT` and `LSP_FX` and call
 `lsp_setup` with the sizes in d0 and d1 instead. Neither is to be called twice on the same images.
 
