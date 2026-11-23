@@ -133,6 +133,31 @@ the areas: `--max-file` = `LSP_DATMAX`, `--max-bank` = `LSP_LIMIT - LSP_BANK`. T
 constants, so the block must sit at a fixed address. A 512 KB machine cannot run the default layout and is
 treated as "not an STE" by the probe.
 
+**A song too big for 1 MB (the 4 MB layout).** The converter refuses a song that does not fit and prints the
+sizes it needs ("LSPSTE.DAT would be 160240 B: more than the 65536 B the player's file area holds", or the
+bank). A song with many long samples played at many pitches (lots of notes, vibrato, slides) is the usual
+cause. On a machine with more RAM, move the file and bank areas above 1 MB; the effects area and the ring
+can stay where they are. Three lines of `lsp_config.s`:
+
+```
+LSP_DAT     equ     $100000                 ; file area at 1 MB
+LSP_DATMAX  equ     $40000                  ; 256 KB of file
+LSP_LIMIT   equ     $3C0000                 ; bank from $140000 up to here: 2.5 MB
+```
+
+and the matching converter call (`--max-file` = `LSP_DATMAX`, `--max-bank` = `LSP_LIMIT - LSP_BANK`):
+
+```sh
+python3 -I tools/lsp_ste.py --max-file 262144 --max-bank 2621440 song.mod LSPSTE.DAT
+```
+
+Measured: `ILLUSION.MOD` (from Uko's STE_FullScreen_MOD_Play) needs a 160 KB file and a 1.48 MB bank. With
+this layout on a 4 MB STE in Hatari it played at 7,726 cycles a VBL on average, 8,200 at worst (the same cost as
+a small song: the mix does not depend on the bank size), after a bank build of about 34 s at 8 MHz (186 cycles
+a byte, computed). Two things to know: `lsp_probe` demands RAM up to `LSP_LIMIT`, so this build refuses 1 MB
+and 2 MB machines (it says "not an STE": keep the default layout for songs that fit it); and the bank build
+time grows with the bank, so show something on screen while `lsp_init` runs.
+
 ### B2. Initialise at start-up (supervisor mode)
 
 `lsp_probe` and `lsp_init` read TOS variables in low memory, so call them in supervisor mode.

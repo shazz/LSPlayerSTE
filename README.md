@@ -109,6 +109,11 @@ Defaults (`src/lsp_config.s`), on a 1 MB STE:
 | `LSPSTE.DAT` as loaded | `$91000` | up to 64 KB |
 | Bank, built at start | `$A1000` | up to 332 KB (end `$F4000`) |
 
+**Bigger songs, 4 MB layout:** a song that does not fit can move the file and bank areas above 1 MB (three
+equates in `lsp_config.s` and two converter options, see HOWTO.md B1): `ILLUSION.MOD`, with a 160 KB file and a
+1.48 MB bank, played that way on a 4 MB STE at the same cost per VBL as a small song. Such a build refuses
+machines with less RAM than `LSP_LIMIT`.
+
 The bank is the sum of the variants' sizes and depends on the module: 56 KB for the demo song, about
 233 KB for a twelve-position song with 41 variants (plain notes, long held loops), 244 KB for a 25-position
 song with arpeggios, vibrato, slides and volume changes inside notes (168 variants; its file is 50 KB). The
